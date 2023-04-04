@@ -74,69 +74,102 @@ function GoapAgent:SetActions(actions)
     self.action_list = actions
 end
 
+----------------------------------------------------------
+---@class ActionNode
+---@field action GoapActionBase
+---@field unsatisfied_state_list table<string, boolean>
+---@field parent_node ActionNode
+local ActionNode = Class(function (self, action, unsatisfied_state_list, parent_node)
+    self.action = action
+    self.unsatisfied_state_list = unsatisfied_state_list or {}
+    self.parent_node = parent_node
+end)
 
---- 检查base_states是否满足target_states的要求,即base_states的状态完全覆盖target_states的状态
----@param base_state table<string, boolean>
----@param target_state table<string, boolean>
----@return boolean
-local function StatesEqual(base_state, target_state)
-    for state_name, val in pairs(target_state) do
-        if base_state[state_name] ~= val then
-            return false
-        end
-    end
-    return true
-end
-
---- 计算target_state与base_state之间有多少个状态未满足
----@param base_state table<string, boolean>
----@param target_state table<string, boolean>
+--- 获取当前Node的Cost,会统计已经产生的cost和预计产生的cost(每个未满足的状态+1)的总和
 ---@return integer
-local function GetDiffNum(base_state, target_state)
-    local num = 0
-    for state_name, val in pairs(target_state) do
-        if base_state[state_name] ~= val then
-            num = num + 1
-        end
+function ActionNode:GetCost()
+    local h = 0
+    for state_name, val in pairs(self.unsatisfied_state_list) do
+        h = h + 1
     end
-    return num
+    return (self.action and self.action.cost or 0) + h
 end
 
---- 检查current_state是否满足action的precondition
----@param action GoapActionBase
----@param current_state table<string, boolean>
+--- 比较两个ActionNode的未满足条件是否一致
+---@param node ActionNode
 ---@return boolean
-local function CanPerform(action, current_state)
-    for state_name, expect_val in pairs(action.preconditions) do
-        if current_state[state_name] ~= expect_val then
+function ActionNode:IsSame(node)
+    local num = 0
+    for state_name, val in pairs(node.unsatisfied_state_list) do
+        if self.unsatisfied_state_list[state_name] ~= val then
             return false
         end
+        num = num + 1
+    end
+    for state_name, val in pairs(self.unsatisfied_state_list) do
+        num = num - 1
+        if num < 0 then return false end
+    end
+    if num > 0 then
+        return false
+    else
+        return true
+    end
+end
+
+--- 检查当前Node所有的前提条件是否都满足了
+---@return boolean
+function ActionNode:IsSatisfied()
+    for k, v in pairs(self.unsatisfied_state_list) do
+        return false
     end
     return true
 end
 
---- 将action的effects应用到base_state上
----@param action GoapActionBase
----@param base_state table<string, boolean>
----@return table<string, boolean>
-local function ApplyEffects(action, base_state)
-    for state_name, val in pairs(action.effects) do
-        base_state[state_name] = val
+--- 获取当前Node需要纳入计划的所有Action(string)
+---@param action_list string[]|nil
+---@param cost_list integer[]|nil
+---@return string[], integer[]
+function ActionNode:GetActionList(action_list, cost_list)
+    action_list = action_list or {}
+    cost_list = cost_list or {}
+    if self.action then
+        table.insert(action_list, self.action.name)
+        table.insert(cost_list, self:GetCost())
     end
-    return base_state
+    if self.parent_node then
+        self.parent_node:GetActionList(action_list, cost_list)
+    end
+    return action_list, cost_list
 end
 
---- 为具体的目标计算行为计划, 如果无法计算出计划将返回nil(该函数在ChatGPT生成的基础上修改)
+----------------------------------------------------------
+
+--- 计算相较base_state,target_state未满足的状态
+---@param base_state table<string, boolean>
+---@param target_state table<string, boolean>
+---@return table<string, boolean>
+local function GetDiffStates(base_state, target_state)
+    local res = {}
+    for state_name, val in pairs(target_state) do
+        if base_state[state_name] ~= val then
+            res[state_name] = val
+        end
+    end
+    return res
+end
+
+--- 为具体的目标计算行为计划, 如果无法计算出计划将返回nil
 ---@param goal GoapGoal     #目标
 ---@param debug_print boolean|nil   #如果为true,将输出计划信息
 ---@return GoapPlan|nil
 function GoapAgent:PlanForGoal(goal, debug_print)
     -- 获取起始状态和目标状态
-    local start_state = self:GetCurrentStates()
     local goal_state = goal.states
+    local init_state = self:GetCurrentStates()
     if debug_print then
         print("- Current State:")
-        for state_name, val in pairs(start_state) do
+        for state_name, val in pairs(init_state) do
             print("--- "..state_name..": "..tostring(val))
         end
         print("- Goal State:")
@@ -145,56 +178,63 @@ function GoapAgent:PlanForGoal(goal, debug_print)
         end
     end
 
-    -- 初始化open集合和closed集合
-    local open_list = { { state = start_state, cost = {f = 0, g = 0, h = 0}, actions = {} } }
-    local closed_list = {}
+    --初始化当前寻路节点
+    local current_node = ActionNode(nil, GetDiffStates(init_state, goal_state), nil)
+    --初始化处理过的和未处理过的ActionNode列表
+    local open_list = {current_node}    ---@type ActionNode[]
+    local closed_list = {}              ---@type ActionNode[]
 
-    -- 循环搜索
     while #open_list > 0 do
-        -- 选择open集合中代价最小的状态
-        table.sort(open_list, function(a, b)
-            if a.cost.f < b.cost.f then
-                return true
-            elseif a.cost.f == b.cost.f and a.cost.h < b.cost.h then
-                return true
+        --取出cost最小的未搜索过的Node
+        table.sort(open_list, function (a, b) return a:GetCost() > b:GetCost() end)
+        current_node = table.remove(open_list, 1)
+        --将current_node加入closed_list，表示已经搜索过了
+        table.insert(closed_list, current_node)
+        --如果未满足状态列表为空，则说明完成了计划
+        if current_node:IsSatisfied() then
+            local actions, costs = current_node:GetActionList()
+            if debug_print then
+                print("- <Get Plan>")
+                local total_cost = 0
+                for i, action in ipairs(actions) do
+                    local cost = costs[i]
+                    print("--- "..i.."  "..action.." | cost: "..cost)
+                    total_cost = total_cost + cost
+                end
+                print("--- Total cost: "..total_cost)
             end
-            return false
-        end)
-        local current_node = table.remove(open_list, 1)
-        -- 如果当前状态已经在closed集合中，跳过
-        local is_in_closed_list = false
-        for i, node in ipairs(closed_list) do
-            if StatesEqual(node.state, current_node.state) then
-                is_in_closed_list = true
-                break
-            end
+            return actions
         end
-        if not is_in_closed_list then
-            -- 如果当前状态和目标状态相等，返回计划
-            if StatesEqual(current_node.state, goal_state) then
-                if debug_print then
-                    print("- Get Plan!")
-                    for i, action in ipairs(current_node.actions) do
-                        print("--- "..i.."  "..action)
+
+        --遍历所有Action, 搜索可以满足current_node.unsatisfied_state_list中至少1个状态的
+        for i, action in ipairs(self.action_list) do
+            local unsatisfied_state_list = deepcopy(current_node.unsatisfied_state_list)
+            --计算当前Action的影响可以满足哪些current_node的未满足状态,将满足的状态从unsatisfied_state_list中移除
+            --只要有一个可以满足，就将它加入open_list
+            local can_connect = false
+            for state_name, val in pairs(action.effects) do
+                if unsatisfied_state_list[state_name] == val then
+                    can_connect = true
+                    unsatisfied_state_list[state_name] = nil
+                end
+            end
+
+            if can_connect then
+                local diff = GetDiffStates(init_state, action.preconditions)
+                for state_name, val in pairs(diff) do
+                    unsatisfied_state_list[state_name] = val
+                end
+                local new_node = ActionNode(action, unsatisfied_state_list, current_node)
+                -- 如果当前状态已经在closed集合中，就不加入open_list
+                local is_in_closed_list = false
+                for _, node in ipairs(closed_list) do
+                    if node:IsSame(new_node) then
+                        is_in_closed_list = true
+                        break
                     end
                 end
-                return current_node.actions
-            end
-            -- 将当前状态加入closed集合
-            table.insert(closed_list, current_node)
-            -- 拓展所有可行的行动
-            for i, action in ipairs(self.action_list) do
-                if CanPerform(action, current_node.state) then
-                    -- 创建新状态
-                    local new_state = ApplyEffects(action, deepcopy(current_node.state))
-
-                    -- 将新状态加入open集合
-                    local new_cost = {g = current_node.cost.g + action.cost}
-                    new_cost.h = GetDiffNum(new_state, goal_state)
-                    new_cost.f = new_cost.g + new_cost.h
-                    local new_actions = deepcopy(current_node.actions)
-                    table.insert(new_actions, action.name)
-                    table.insert(open_list, { state = new_state, cost = new_cost, actions = new_actions })
+                if not is_in_closed_list then
+                    table.insert(open_list, new_node)
                 end
             end
         end
