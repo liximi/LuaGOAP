@@ -13,6 +13,8 @@ local items = {
     log = {pickup = true, buy = true, gather = false},
     berry = {pickup = true, buy = true, gather = true, eat = true},
     campfire = {pickup = false, buy = true, gather = false, make = true},
+    rock = {pickup = true, buy = true, gather = false},
+    machine = {make = true, gather = true},
 }
 
 
@@ -139,6 +141,12 @@ MyAgent:SetGoals(goals)
 
 
 --进行计划
-MyAgent:Plan(true)
+local t = os.clock()
+for i = 1, 100 do
+    MyAgent:Plan(false)
+end
+local t1 = os.clock() - t
+print("cost time of 100 times: "..t1)
+
 
 print("\ndone")

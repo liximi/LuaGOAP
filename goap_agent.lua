@@ -88,6 +88,20 @@ local function StatesEqual(base_state, target_state)
     return true
 end
 
+--- 计算target_state与base_state之间有多少个状态未满足
+---@param base_state table<string, boolean>
+---@param target_state table<string, boolean>
+---@return integer
+local function GetDiffNum(base_state, target_state)
+    local num = 0
+    for state_name, val in pairs(target_state) do
+        if base_state[state_name] ~= val then
+            num = num + 1
+        end
+    end
+    return num
+end
+
 --- 检查current_state是否满足action的precondition
 ---@param action GoapActionBase
 ---@param current_state table<string, boolean>
@@ -112,7 +126,8 @@ local function ApplyEffects(action, base_state)
     return base_state
 end
 
---- 为具体的目标计算行为计划, 如果无法计算出计划将返回nil(该函数由ChatGPT生成)
+--- 为具体的目标计算行为计划, 如果无法计算出计划将返回nil(该函数在ChatGPT生成的基础上修改)
+---@param goal GoapGoal     #目标
 ---@param debug_print boolean|nil   #如果为true,将输出计划信息
 ---@return GoapPlan|nil
 function GoapAgent:PlanForGoal(goal, debug_print)
@@ -131,13 +146,20 @@ function GoapAgent:PlanForGoal(goal, debug_print)
     end
 
     -- 初始化open集合和closed集合
-    local open_list = { { state = start_state, cost = 0, actions = {} } }
+    local open_list = { { state = start_state, cost = {f = 0, g = 0, h = 0}, actions = {} } }
     local closed_list = {}
 
     -- 循环搜索
     while #open_list > 0 do
         -- 选择open集合中代价最小的状态
-        table.sort(open_list, function(a, b) return a.cost < b.cost end)
+        table.sort(open_list, function(a, b)
+            if a.cost.f < b.cost.f then
+                return true
+            elseif a.cost.f == b.cost.f and a.cost.h < b.cost.h then
+                return true
+            end
+            return false
+        end)
         local current_node = table.remove(open_list, 1)
         -- 如果当前状态已经在closed集合中，跳过
         local is_in_closed_list = false
@@ -167,7 +189,9 @@ function GoapAgent:PlanForGoal(goal, debug_print)
                     local new_state = ApplyEffects(action, deepcopy(current_node.state))
 
                     -- 将新状态加入open集合
-                    local new_cost = current_node.cost + action.cost
+                    local new_cost = {g = current_node.cost.g + action.cost}
+                    new_cost.h = GetDiffNum(new_state, goal_state)
+                    new_cost.f = new_cost.g + new_cost.h
                     local new_actions = deepcopy(current_node.actions)
                     table.insert(new_actions, action.name)
                     table.insert(open_list, { state = new_state, cost = new_cost, actions = new_actions })
