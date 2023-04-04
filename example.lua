@@ -142,11 +142,7 @@ MyAgent:SetGoals(goals)
 
 --进行计划
 local t = os.clock()
-for i = 1, 100 do
-    MyAgent:Plan(false)
-end
-local t1 = os.clock() - t
-print("cost time of 100 times: "..t1)
-
+MyAgent:Plan(false)
+print("cost time: "..(os.clock() - t))
 
 print("\ndone")
