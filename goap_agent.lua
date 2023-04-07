@@ -69,7 +69,7 @@ function GoapAgent:SetStates(states)
 end
 
 --- 设置所有可选行为
----@param actions table<string, GoapActionBase>
+---@param actions GoapActionBase[]
 function GoapAgent:SetActions(actions)
     self.action_list = actions
 end
