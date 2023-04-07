@@ -3,7 +3,7 @@
 ---@class GoapAgent
 ---@field inst table                            #该代理挂载的对象
 ---@field state_list table<string, function>    #key为状态名称,value为查询状态值的函数,接受agent.inst作为参数
----@field action_list GoapActionBase[]          #所有可用行为
+---@field action_list table<string, GoapActionBase[]>     #所有可用行为
 ---@field goal_list GoapGoal[]                  #所有可选择的目标,按照优先级排序,越靠前的越优先考虑
 ---@field current_goal GoapGoal|nil             #当前设定的目标
 ---@field current_plan GoapPlan|nil             #当期设定的计划
@@ -68,10 +68,19 @@ function GoapAgent:SetStates(states)
     self.state_list = states
 end
 
---- 设置所有可选行为
----@param actions table<string, GoapActionBase>
+--- 设置所有可选行为，会将行为按照其effects里的state和value进行分类储存
+---@param actions GoapActionBase[]
 function GoapAgent:SetActions(actions)
-    self.action_list = actions
+    self.action_list = {}
+    for _, action in ipairs(actions) do
+        for state_name, val in pairs(action.effects) do
+            local key = table.concat({state_name, tostring(val)}, "_")
+            if not self.action_list[key] then
+                self.action_list[key] = {}
+            end
+            table.insert(self.action_list[key], action)
+        end
+    end
 end
 
 ----------------------------------------------------------
@@ -206,35 +215,33 @@ function GoapAgent:PlanForGoal(goal, debug_print)
             return actions
         end
 
-        --遍历所有Action, 搜索可以满足current_node.unsatisfied_state_list中至少1个状态的
-        for i, action in ipairs(self.action_list) do
-            local unsatisfied_state_list = deepcopy(current_node.unsatisfied_state_list)
-            --计算当前Action的影响可以满足哪些current_node的未满足状态,将满足的状态从unsatisfied_state_list中移除
-            --只要有一个可以满足，就将它加入open_list
-            local can_connect = false
-            for state_name, val in pairs(action.effects) do
-                if unsatisfied_state_list[state_name] == val then
-                    can_connect = true
-                    unsatisfied_state_list[state_name] = nil
-                end
-            end
-
-            if can_connect then
-                local diff = GetDiffStates(init_state, action.preconditions)
-                for state_name, val in pairs(diff) do
-                    unsatisfied_state_list[state_name] = val
-                end
-                local new_node = ActionNode(action, unsatisfied_state_list, current_node)
-                -- 如果当前状态已经在closed集合中，就不加入open_list
-                local is_in_closed_list = false
-                for _, node in ipairs(closed_list) do
-                    if node:IsSame(new_node) then
-                        is_in_closed_list = true
-                        break
+        --遍历当前所有没有满足的条件，在self.action_list中直接查询有没有能满足的action，有就加入open_list
+        for state_name, val in pairs(current_node.unsatisfied_state_list) do
+            local key = table.concat({state_name, tostring(val)}, "_")
+            if self.action_list[key] then
+                for _, action in ipairs(self.action_list[key]) do
+                    local unsatisfied_state_list = deepcopy(current_node.unsatisfied_state_list)
+                    for state_name, val in pairs(action.effects) do
+                        if unsatisfied_state_list[state_name] == val then
+                            unsatisfied_state_list[state_name] = nil
+                        end
                     end
-                end
-                if not is_in_closed_list then
-                    table.insert(open_list, new_node)
+                    local diff = GetDiffStates(init_state, action.preconditions)
+                    for state_name, val in pairs(diff) do
+                        unsatisfied_state_list[state_name] = val
+                    end
+                    local new_node = ActionNode(action, unsatisfied_state_list, current_node)
+                    -- 如果当前状态已经在closed集合中，就不加入open_list
+                    local is_in_closed_list = false
+                    for _, node in ipairs(closed_list) do
+                        if node:IsSame(new_node) then
+                            is_in_closed_list = true
+                            break
+                        end
+                    end
+                    if not is_in_closed_list then
+                        table.insert(open_list, new_node)
+                    end
                 end
             end
         end
