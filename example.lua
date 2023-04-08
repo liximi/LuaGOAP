@@ -37,7 +37,7 @@ local states = {
 }
 for item, data in pairs(items) do
     states["has_"..item] = function(inst)
-        return inst.items[item] and inst.items[item] > 0 or false
+        return inst.items[item] or 0
     end
     if data.pickup then
         states["can_pickup_"..item] = function(inst)
@@ -45,8 +45,8 @@ for item, data in pairs(items) do
         end
     end
     if data.buy then
-        states["has_enough_money_for_"..item] = function(inst)
-            return inst.money >= 10
+        states["money"] = function(inst)
+            return inst.money or 0
         end
     end
     if data.gather then
@@ -58,43 +58,85 @@ end
 
 
 --准备可用行为
+local can_pickup_checker = function (current_val)
+    return current_val ~= false
+end
+local pickup_effector = function (current_val)
+    return current_val + 1
+end
 local GoapAction_PickUp = Class(GOAP.Action, function (self, item, cost)
     local name = "pickup_"..item
-    local preconditions = {["can_pickup_"..item] = true}
-    local effects = {["has_"..item] = true}
+    local preconditions = {["can_pickup_"..item] = can_pickup_checker}
+    local effects = {["has_"..item] = pickup_effector}
     GOAP.Action._ctor(self, name, preconditions, effects, cost)
 end)
+
+local has_enough_money_checker = function (current_val)
+    return current_val > 10
+end
+local buy_effector = function (current_val)
+    return current_val + 1
+end
 local GoapAction_Buy = Class(GOAP.Action, function (self, item, cost)
     local name = "buy_"..item
-    local preconditions = {["has_enough_money_for_"..item] = true}
-    local effects = {["has_"..item] = true}
+    local preconditions = {["money"] = has_enough_money_checker}
+    local effects = {["has_"..item] = buy_effector}
     GOAP.Action._ctor(self, name, preconditions, effects, cost)
 end)
+
+local make_checker = function (current_val)
+    return current_val > 0
+end
+local make_effector = function (current_val)
+    return current_val + 1
+end
 local GoapAction_Make = Class(GOAP.Action, function (self, item, cost)
     local name = "make_"..item
     local ingredients = {"log"}
     local preconditions = {}
     for _, ingredient in ipairs(ingredients) do
-        preconditions["has_"..ingredient] = true
+        preconditions["has_"..ingredient] = make_checker
     end
-    local effects = {["has_"..item] = true}
+    local effects = {["has_"..item] = make_effector}
     GOAP.Action._ctor(self, name, preconditions, effects, cost)
 end)
+
+local can_gather_checker = function (current_val)
+    return current_val ~= false
+end
+local gather_effector = function (current_val)
+    return current_val + 1
+end
 local GoapAction_Gather = Class(GOAP.Action, function (self, item, cost)
     local name = "gather_"..item
-    local preconditions = {["can_gather_"..item] = true}
-    local effects = {["has_"..item] = true}
+    local preconditions = {["can_gather_"..item] = can_gather_checker}
+    local effects = {["has_"..item] = gather_effector}
     GOAP.Action._ctor(self, name, preconditions, effects, cost)
 end)
+
+local eat_checker = function (current_val)
+    return current_val > 2
+end
+local eat_effector = function (current_val)
+    return false
+end
 local GoapAction_Eat = Class(GOAP.Action, function (self, item, cost)
     local name = "eat_"..item
-    local preconditions = {["has_"..item] = true}
-    local effects = {is_hunger = false}
+    local preconditions = {["has_"..item] = eat_checker}
+    local effects = {is_hunger = eat_effector}
     GOAP.Action._ctor(self, name, preconditions, effects, cost)
 end)
 
 local actions = {
-    GOAP.Action("refuelling", {has_campfire = true, has_log = true}, {suitable_temperature = true, is_in_dark = false}, 1),
+    GOAP.Action("refuelling", {has_campfire = function(current_val)
+        return current_val > 0
+    end, has_log = function(current_val)
+        return current_val > 0
+    end}, {suitable_temperature = function(current_val)
+        return true
+    end, is_in_dark = function(current_val)
+        return false
+    end}, 1),
 }
 for item, data in pairs(items) do
     if data.pickup then
@@ -118,8 +160,14 @@ end
 --准备可用目标
 --goal_name = GoapGoal
 local goals = {
-    GOAP.Goal("MakeAFire", { suitable_temperature = true, is_in_dark = false, }),
-    GOAP.Goal("DontStarve", { is_hunger = false }),
+    GOAP.Goal("MakeAFire", { suitable_temperature = function (current_val)
+        return current_val ~= false
+    end, is_in_dark = function (current_val)
+        return current_val == false
+    end, }),
+    GOAP.Goal("DontStarve", { is_hunger = function (current_val)
+        return current_val == false
+    end }),
 }
 
 
@@ -142,7 +190,9 @@ MyAgent:SetGoals(goals)
 
 --进行计划
 local t = os.clock()
-MyAgent:Plan(true)
+for i = 1, 1000 do
+    MyAgent:Plan(false)
+end
 print("cost time: "..(os.clock() - t))
 
 print("\ndone")
