@@ -2,8 +2,8 @@
 
 ---@class GoapAgent
 ---@field inst table                            #该代理挂载的对象
----@field state_list table<string, function>    #key为状态名称,value为查询状态值的函数,接受agent.inst作为参数
----@field action_list table<string, GoapActionBase[]>     #所有可用行为
+---@field state_list table<string, fun(inst:table):any>     #key为状态名称,value为查询状态值的函数,接受agent.inst作为参数
+---@field action_list table<string, GoapActionBase[]>       #所有可用行为
 ---@field goal_list GoapGoal[]                  #所有可选择的目标,按照优先级排序,越靠前的越优先考虑
 ---@field current_goal GoapGoal|nil             #当前设定的目标
 ---@field current_plan GoapPlan|nil             #当期设定的计划
@@ -158,8 +158,8 @@ end
 
 --- 计算相较preconditions未满足的条件
 ---@param base_state table<string, any>
----@param preconditions table<string, function>
----@return table<string, function>
+---@param preconditions table<string, fun(current_val:any):boolean>
+---@return table<string, fun(current_val:any):boolean>
 local function GetUnsatisfiedPreconditions(base_state, preconditions)
     local res = {}
     for state_name, checker in pairs(preconditions) do
