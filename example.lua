@@ -10,19 +10,17 @@ local GOAP = require "goap"
 
 
 local items = {
-    log = {pickup = true, buy = true, gather = false},
-    berry = {pickup = true, buy = true, gather = true, eat = true},
-    campfire = {pickup = false, buy = true, gather = false, make = true},
-    rock = {pickup = true, buy = true, gather = false},
-    machine = {make = true, gather = true, buy = true},
+    log = {pickup = true, buy = true},
+    berry = {buy = true, gather = true, eat = true},
+    campfire = {buy = true, make = true},
 }
 
 
 --准备可用状态 state_name = state_collector
 local states = {
     --temperature
-    suitable_temperature = function(inst)
-        return inst.temperature <= 30 and inst.temperature >= 14
+    temperature = function(inst)
+        return inst.temperature
     end,
 
     --light
@@ -59,7 +57,7 @@ end
 
 --准备可用行为
 local can_pickup_checker = function (current_val)
-    return current_val ~= false
+    return current_val == true
 end
 local pickup_effector = function (current_val)
     return current_val + 1
@@ -72,7 +70,7 @@ local GoapAction_PickUp = Class(GOAP.Action, function (self, item, cost)
 end)
 
 local has_enough_money_checker = function (current_val)
-    return current_val > 10
+    return current_val >= 2, 2 - current_val
 end
 local buy_effector = function (current_val)
     return current_val + 1
@@ -80,12 +78,14 @@ end
 local GoapAction_Buy = Class(GOAP.Action, function (self, item, cost)
     local name = "buy_"..item
     local preconditions = {["money"] = has_enough_money_checker}
-    local effects = {["has_"..item] = buy_effector}
+    local effects = {["has_"..item] = buy_effector, money = function (current_val)
+        return current_val - 2
+    end}
     GOAP.Action._ctor(self, name, preconditions, effects, cost)
 end)
 
 local make_checker = function (current_val)
-    return current_val > 0
+    return current_val > 0, 1 - current_val
 end
 local make_effector = function (current_val)
     return current_val + 1
@@ -102,7 +102,7 @@ local GoapAction_Make = Class(GOAP.Action, function (self, item, cost)
 end)
 
 local can_gather_checker = function (current_val)
-    return current_val ~= false
+    return current_val == true
 end
 local gather_effector = function (current_val)
     return current_val + 1
@@ -115,7 +115,7 @@ local GoapAction_Gather = Class(GOAP.Action, function (self, item, cost)
 end)
 
 local eat_checker = function (current_val)
-    return current_val > 2
+    return current_val > 2, 3 - current_val
 end
 local eat_effector = function (current_val)
     return false
@@ -128,12 +128,14 @@ local GoapAction_Eat = Class(GOAP.Action, function (self, item, cost)
 end)
 
 local actions = {
-    GOAP.Action("refuelling", {has_campfire = function(current_val)
-        return current_val > 0
+    GOAP.Action("refuelling",
+    {has_campfire = function(current_val)
+        return current_val > 0, 1 - current_val
     end, has_log = function(current_val)
-        return current_val > 0
-    end}, {suitable_temperature = function(current_val)
-        return true
+        return current_val > 0, 1 - current_val
+    end},
+    {temperature = function(current_val)
+        return 25
     end, is_in_dark = function(current_val)
         return false
     end}, 1),
@@ -160,8 +162,8 @@ end
 --准备可用目标
 --goal_name = GoapGoal
 local goals = {
-    GOAP.Goal("MakeAFire", { suitable_temperature = function (current_val)
-        return current_val ~= false
+    GOAP.Goal("MakeAFire", { temperature = function (current_val)
+        return current_val >= 14 and current_val <= 30
     end, is_in_dark = function (current_val)
         return current_val == false
     end, }),
@@ -190,8 +192,8 @@ MyAgent:SetGoals(goals)
 
 --进行计划
 local t = os.clock()
-for i = 1, 1000 do
-    MyAgent:Plan(false)
+for i = 1, 1 do
+    MyAgent:Plan(true)
 end
 print("cost time: "..(os.clock() - t))
 

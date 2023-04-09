@@ -44,7 +44,7 @@ function GoapAgent:GetCurrentState(state_name)
 end
 
 --- 获取当前的所有状态值
----@return table<string, number|boolean>
+---@return table<string, any>
 function GoapAgent:GetCurrentStates()
     local res = {}
     for state_name, getter in pairs(self.state_list) do
@@ -86,7 +86,7 @@ end
 ----------------------------------------------------------
 ---@class ActionNode
 ---@field action GoapActionBase
----@field unsatisfied_preconditions table<string, boolean>
+---@field unsatisfied_preconditions table<string, fun(current_val:any):boolean>
 ---@field parent_node ActionNode
 ---@field cost integer
 local ActionNode = Class(function (self, action, unsatisfied_preconditions, parent_node)
@@ -107,25 +107,27 @@ function ActionNode:CalcuCost()
 end
 
 --- 比较两个ActionNode的未满足条件是否一致
+---@param base_state table<string, any>
 ---@param node ActionNode
 ---@return boolean
-function ActionNode:IsSame(node)
+function ActionNode:IsSame(base_state, node)
     local num = 0
-    for state_name, val in pairs(node.unsatisfied_preconditions) do
-        if self.unsatisfied_preconditions[state_name] ~= val then
+    for state_name, checker in pairs(node.unsatisfied_preconditions) do
+        local current_val = base_state[state_name]
+        if not self.unsatisfied_preconditions[state_name] then
+            return false
+        end
+        local val_self, diff_self = self.unsatisfied_preconditions[state_name](current_val)
+        local val_node, diff_node = checker(current_val)
+        if val_self ~= val_node or diff_self ~= diff_node then
             return false
         end
         num = num + 1
     end
-    for state_name, val in pairs(self.unsatisfied_preconditions) do
+    for state_name, checker in pairs(self.unsatisfied_preconditions) do
         num = num - 1
-        if num < 0 then return false end
     end
-    if num > 0 then
-        return false
-    else
-        return true
-    end
+    return num == 0
 end
 
 --- 检查当前Node所有的前提条件是否都满足了
@@ -198,7 +200,7 @@ function GoapAgent:PlanForGoal(goal, debug_print)
 
     while #open_list > 0 do
         --取出cost最小的未搜索过的Node
-        table.sort(open_list, function (a, b) return a.cost > b.cost end)
+        table.sort(open_list, function (a, b) return a.cost < b.cost end)
         current_node = table.remove(open_list, 1)
         --将current_node加入closed_list，表示已经搜索过了
         table.insert(closed_list, current_node)
@@ -244,7 +246,7 @@ function GoapAgent:PlanForGoal(goal, debug_print)
                     -- 如果当前状态已经在closed集合中，就不加入open_list
                     local is_in_closed_list = false
                     for _, node in ipairs(closed_list) do
-                        if node:IsSame(new_node) then
+                        if node:IsSame(init_state, new_node) then
                             is_in_closed_list = true
                             break
                         end
