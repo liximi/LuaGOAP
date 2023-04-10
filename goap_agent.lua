@@ -86,55 +86,74 @@ end
 ----------------------------------------------------------
 ---@class ActionNode
 ---@field action GoapActionBase
----@field unsatisfied_preconditions table<string, fun(current_val:any):boolean>
+---@field preconditions table<string, fun(current_val:any):boolean>
 ---@field parent_node ActionNode
+---@field cost_h integer
+---@field cost_g integer
 ---@field cost integer
-local ActionNode = Class(function (self, action, unsatisfied_preconditions, parent_node)
+local ActionNode = Class(function (self, action, preconditions, parent_node, init_state)
     self.action = action
-    self.unsatisfied_preconditions = unsatisfied_preconditions or {}
+    self.preconditions = preconditions or {}
     self.parent_node = parent_node
-    self.cost = self:CalcuCost()
+    self.cost_h = self:CalcuCostH()
+    self.cost_g = self:CalcuCostG(init_state)
+    self.cost = self.cost_h + self.cost_g
 end)
 
---- 获取当前Node的Cost,会统计已经产生的cost和预计产生的cost(每个未满足的状态+1)的总和
+--- 计算当前Node的CostH,即当前Node到GoalState的距离
 ---@return integer
-function ActionNode:CalcuCost()
-    local h = 0
-    for state_name, val in pairs(self.unsatisfied_preconditions) do
-        h = h + 1
+function ActionNode:CalcuCostH()
+    local parent_h = self.parent_node and self.parent_node.cost_h or 0
+    return parent_h + (self.action and self.action.cost or 0)
+end
+
+--- 计算当前Node的CostG,即当前Node到InitState的距离
+---@return integer
+function ActionNode:CalcuCostG(init_state)
+    local g = 0
+    for state_name, checker in pairs(self.preconditions) do
+        if init_state and init_state[state_name] then
+            local res, diff = checker(init_state[state_name])
+            g = g + diff
+        else
+            g = g + 1
+        end
     end
-    return (self.action and self.action.cost or 0) + h
+    return g
 end
 
 --- 比较两个ActionNode的未满足条件是否一致
----@param base_state table<string, any>
+---@param init_state table<string, any>
 ---@param node ActionNode
 ---@return boolean
-function ActionNode:IsSame(base_state, node)
+function ActionNode:IsSame(init_state, node)
     local num = 0
-    for state_name, checker in pairs(node.unsatisfied_preconditions) do
-        local current_val = base_state[state_name]
-        if not self.unsatisfied_preconditions[state_name] then
+    for state_name, checker in pairs(node.preconditions) do
+        local current_val = init_state[state_name]
+        if not self.preconditions[state_name] then
             return false
         end
-        local val_self, diff_self = self.unsatisfied_preconditions[state_name](current_val)
+        local val_self, diff_self = self.preconditions[state_name](current_val)
         local val_node, diff_node = checker(current_val)
         if val_self ~= val_node or diff_self ~= diff_node then
             return false
         end
         num = num + 1
     end
-    for state_name, checker in pairs(self.unsatisfied_preconditions) do
+    for state_name, checker in pairs(self.preconditions) do
         num = num - 1
     end
     return num == 0
 end
 
 --- 检查当前Node所有的前提条件是否都满足了
+---@param init_state table<string, any>
 ---@return boolean
-function ActionNode:IsSatisfied()
-    for k, v in pairs(self.unsatisfied_preconditions) do
-        return false
+function ActionNode:IsSatisfied(init_state)
+    for state_name, checker in pairs(self.preconditions) do
+        if not checker(init_state[state_name]) then
+            return false
+        end
     end
     return true
 end
@@ -156,22 +175,21 @@ function ActionNode:GetActionList(action_list, cost_list)
     return action_list, cost_list
 end
 
-----------------------------------------------------------
-
---- 计算相较preconditions未满足的条件
----@param base_state table<string, any>
----@param preconditions table<string, fun(current_val:any):boolean>
----@return table<string, fun(current_val:any):boolean>
-local function GetUnsatisfiedPreconditions(base_state, preconditions)
-    local res = {}
-    for state_name, checker in pairs(preconditions) do
-        local currnet_val = base_state[state_name]
-        if not checker(currnet_val) then
-            res[state_name] = checker
-        end
+--- 打印当前Node的信息
+function ActionNode:Print()
+    local str = {"------ActionNode------", tostring(self)}
+    table.insert(str, "action: "..tostring(self.action and self.action.name or nil))
+    table.insert(str, "preconditions:")
+    for state_name, checker in pairs(self.preconditions) do
+        table.insert(str, "-- "..state_name.." "..tostring(checker))
     end
-    return res
+    table.insert(str, "parent_node: "..tostring(self.parent_node).."  "..tostring(self.parent_node and self.parent_node.action and self.parent_node.action.name or nil))
+    table.insert(str, "cost: "..tostring(self.cost).." to_init:"..tostring(self.cost_g).." + from_goal:"..tostring(self.cost_h))
+    table.insert(str, "----------------------")
+    print(table.concat(str, "\n"))
 end
+
+----------------------------------------------------------
 
 --- 为具体的目标计算行为计划, 如果无法计算出计划将返回nil
 ---@param goal GoapGoal     #目标
@@ -179,7 +197,7 @@ end
 ---@return GoapPlan|nil
 function GoapAgent:PlanForGoal(goal, debug_print)
     -- 获取起始状态和目标状态
-    local goal_state = goal.preconditions
+    local goal_state = deepcopy(goal.preconditions)
     local init_state = self:GetCurrentStates()
     if debug_print then
         print("- Current State:")
@@ -193,19 +211,26 @@ function GoapAgent:PlanForGoal(goal, debug_print)
     end
 
     --初始化当前寻路节点
-    local current_node = ActionNode(nil, GetUnsatisfiedPreconditions(init_state, goal_state), nil)
+    local current_node = ActionNode(nil, goal_state, nil, init_state)
     --初始化处理过的和未处理过的ActionNode列表
     local open_list = {current_node}    ---@type ActionNode[]
     local closed_list = {}              ---@type ActionNode[]
 
     while #open_list > 0 do
         --取出cost最小的未搜索过的Node
-        table.sort(open_list, function (a, b) return a.cost < b.cost end)
+        table.sort(open_list, function (a, b)
+            if a.cost == b.cost then
+                return a.cost_g < b.cost_g
+            else
+                return a.cost < b.cost
+            end
+        end)
         current_node = table.remove(open_list, 1)
         --将current_node加入closed_list，表示已经搜索过了
         table.insert(closed_list, current_node)
+        -- current_node:Print()
         --如果未满足状态列表为空，则说明完成了计划
-        if current_node:IsSatisfied() then
+        if current_node:IsSatisfied(init_state) then
             local actions, costs = current_node:GetActionList()
             if debug_print then
                 print("- <Get Plan>")
@@ -221,38 +246,50 @@ function GoapAgent:PlanForGoal(goal, debug_print)
         end
 
         --遍历当前所有没有满足的条件，在self.action_list中直接查询有没有能满足的action，有就加入open_list
-        for state_name, checker in pairs(current_node.unsatisfied_preconditions) do
-            if self.action_list[state_name] then
+        for state_name, checker in pairs(current_node.preconditions) do
+            if not self.action_list[state_name] and not checker(init_state[state_name]) then
+                break   --该条件永远不可能被满足
+            end
+            local current_check_result, current_check_diff = checker(init_state[state_name])
+            if not current_check_result then
                 for _, action in ipairs(self.action_list[state_name]) do
-                    local unsatisfied_preconditions = deepcopy(current_node.unsatisfied_preconditions)
+                    local is_vaild = true
+                    local preconditions = deepcopy(current_node.preconditions)
                     for state_name, effector in pairs(action.effects) do
-                        local old_checker = unsatisfied_preconditions[state_name]
+                        local old_checker = preconditions[state_name]
                         if old_checker then
                             local new_checker = function(current_val)
                                 current_val = effector(current_val)
                                 return old_checker(current_val)
                             end
-                            unsatisfied_preconditions[state_name] = new_checker
-                            if new_checker(init_state[state_name]) then
-                                unsatisfied_preconditions[state_name] = nil
+                            preconditions[state_name] = new_checker
+                            local new_check_result, new_check_diff = new_checker(init_state[state_name])
+                            --如果新Node会导致与期望状态的差异越来越大或没有变化，就不采用
+                            if current_check_result and not new_check_result then
+                                is_vaild = false
+                            elseif current_check_diff <= new_check_diff then
+                                is_vaild = false
                             end
                         end
                     end
-                    local diff = GetUnsatisfiedPreconditions(init_state, action.preconditions)
-                    for state_name, checker in pairs(diff) do
-                        unsatisfied_preconditions[state_name] = checker
-                    end
-                    local new_node = ActionNode(action, unsatisfied_preconditions, current_node)
-                    -- 如果当前状态已经在closed集合中，就不加入open_list
-                    local is_in_closed_list = false
-                    for _, node in ipairs(closed_list) do
-                        if node:IsSame(init_state, new_node) then
-                            is_in_closed_list = true
-                            break
+                    if is_vaild then
+                        for state_name, checker in pairs(action.preconditions) do
+                            if not preconditions[state_name] then
+                                preconditions[state_name] = checker
+                            end
                         end
-                    end
-                    if not is_in_closed_list then
-                        table.insert(open_list, new_node)
+                        local new_node = ActionNode(action, preconditions, current_node, init_state)
+                        -- 如果当前状态已经在closed集合中，就不加入open_list
+                        local is_in_closed_list = false
+                        for _, node in ipairs(closed_list) do
+                            if node:IsSame(init_state, new_node) then
+                                is_in_closed_list = true
+                                break
+                            end
+                        end
+                        if not is_in_closed_list then
+                            table.insert(open_list, new_node)
+                        end
                     end
                 end
             end

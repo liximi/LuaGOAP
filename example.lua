@@ -57,7 +57,8 @@ end
 
 --准备可用行为
 local can_pickup_checker = function (current_val)
-    return current_val == true
+    local res = current_val == true
+    return res, res and 0 or 1
 end
 local pickup_effector = function (current_val)
     return current_val + 1
@@ -70,7 +71,7 @@ local GoapAction_PickUp = Class(GOAP.Action, function (self, item, cost)
 end)
 
 local has_enough_money_checker = function (current_val)
-    return current_val >= 2, 2 - current_val
+    return current_val >= 2, math.max(0, 2 - current_val)
 end
 local buy_effector = function (current_val)
     return current_val + 1
@@ -85,7 +86,7 @@ local GoapAction_Buy = Class(GOAP.Action, function (self, item, cost)
 end)
 
 local make_checker = function (current_val)
-    return current_val > 0, 1 - current_val
+    return current_val > 0, math.max(0, 1 - current_val)
 end
 local make_effector = function (current_val)
     return current_val + 1
@@ -102,7 +103,8 @@ local GoapAction_Make = Class(GOAP.Action, function (self, item, cost)
 end)
 
 local can_gather_checker = function (current_val)
-    return current_val == true
+    local res = current_val == true
+    return res, res and 0 or 1
 end
 local gather_effector = function (current_val)
     return current_val + 1
@@ -115,7 +117,7 @@ local GoapAction_Gather = Class(GOAP.Action, function (self, item, cost)
 end)
 
 local eat_checker = function (current_val)
-    return current_val > 2, 3 - current_val
+    return current_val > 2, math.max(0, 3 - current_val)
 end
 local eat_effector = function (current_val)
     return false
@@ -130,9 +132,9 @@ end)
 local actions = {
     GOAP.Action("refuelling",
     {has_campfire = function(current_val)
-        return current_val > 0, 1 - current_val
+        return current_val > 0, math.max(0, 1 - current_val)
     end, has_log = function(current_val)
-        return current_val > 0, 1 - current_val
+        return current_val > 0, math.max(0, 1 - current_val)
     end},
     {temperature = function(current_val)
         return 25
@@ -148,7 +150,7 @@ for item, data in pairs(items) do
         table.insert(actions, GoapAction_Buy(item, 2))
     end
     if data.gather then
-        table.insert(actions, GoapAction_Gather(item))
+        table.insert(actions, GoapAction_Gather(item, 2))
     end
     if data.make then
         table.insert(actions, GoapAction_Make(item))
@@ -163,12 +165,15 @@ end
 --goal_name = GoapGoal
 local goals = {
     GOAP.Goal("MakeAFire", { temperature = function (current_val)
-        return current_val >= 14 and current_val <= 30
+        local diff = math.max(0, 14 - current_val, current_val - 30)
+        return current_val >= 14 and current_val <= 30, diff
     end, is_in_dark = function (current_val)
-        return current_val == false
+        local res = current_val == false
+        return res, res and 0 or 1
     end, }),
     GOAP.Goal("DontStarve", { is_hunger = function (current_val)
-        return current_val == false
+        local res = current_val == false
+        return res, res and 0 or 1
     end }),
 }
 
